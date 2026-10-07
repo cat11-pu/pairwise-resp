@@ -142,7 +142,7 @@ class Parser:
         if len(self._buffer) < end + len(CRLF):
             return None, 0
         value = bytes(self._buffer[payload_at:end]).decode("utf-8", "surrogateescape")
-        return value, payload_at + len(value) + len(CRLF)
+        return value, end + len(CRLF)
 
     def _read_array(self):
         """Return (arguments, next_offset) for the array command at the head."""
@@ -160,7 +160,7 @@ class Parser:
             if value is None:
                 return None, 0
             args.append(value)
-        return args, offset + len(CRLF)
+        return args, offset
 
     def _read_inline(self):
         """Return (arguments, next_offset) for the inline command at the head."""
@@ -191,7 +191,7 @@ def _array_count(text):
 
 def _split_inline(line):
     """Split an inline command into its arguments."""
-    return line.strip().split(" ")
+    return line.split()
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +218,14 @@ class Store:
         deadline = self._expires.get(key)
         if deadline is None:
             return False
-        return deadline < self._now()
+        return deadline <= self._now()
 
     def _purge(self, key):
         """Drop key when it has expired, reporting whether it was dropped."""
         if not self._is_expired(key):
             return False
         del self._expires[key]
+        del self._values[key]
         return True
 
     def get(self, key):
@@ -275,9 +276,9 @@ class Store:
         if current is None:
             current = "0"
         value = parse_integer(current) + amount
-        self._values[key] = str(value)
         if not INT64_MIN <= value <= INT64_MAX:
             raise CommandError("ERR increment or decrement would overflow")
+        self._values[key] = str(value)
         return value
 
 
@@ -298,7 +299,7 @@ def command_set(session, args):
         seconds = parse_integer(args[index + 1])
         if seconds <= 0:
             raise CommandError("ERR invalid expire time in 'set' command")
-        ttl = seconds * 1000
+        ttl = seconds
         index += 2
     session.store.set(key, value, ttl)
     return encode_simple("OK")
@@ -380,7 +381,7 @@ class Session:
         name = args[0].upper()
         handler = _COMMANDS.get(name)
         if handler is None:
-            return encode_simple("ERR unknown command '%s'" % args[0])
+            return encode_error("ERR unknown command '%s'" % args[0])
         low, high = _ARITY[name]
         if len(args) < low or (high is not None and len(args) > high):
             return encode_error(
